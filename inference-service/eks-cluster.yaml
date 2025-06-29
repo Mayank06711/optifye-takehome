@@ -1,0 +1,37 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: inference-service
+  region: ap-south-1
+  version: '1.28'
+
+vpc:
+  cidr: 10.0.0.0/16
+  nat:
+    gateway: Single
+
+nodeGroups:
+  - name: inference-nodes
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 2
+    volumeSize: 50
+    volumeType: gp3
+    volumeEncrypted: true
+    labels:
+      role: inference
+      environment: demo
+    tags:
+      Environment: demo
+      Project: video-inference
+      Owner: assignment
+    iam:
+      withAddonPolicies:
+        autoScaler: true
+        ebs: true
+        efs: true
+        albIngress: true
+    ssh:
+      allow: false

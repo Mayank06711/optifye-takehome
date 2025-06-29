@@ -1,0 +1,21 @@
+# FastAPI and server
+fastapi==0.104.1
+uvicorn==0.24.0
+
+# YOLOv5 for object detection (use compatible version)
+ultralytics==8.0.196
+
+# Image processing (compatible with Python 3.9)
+opencv-python==4.8.1.78
+numpy==1.24.3
+Pillow==10.0.0
+
+# Data validation
+pydantic==2.5.0
+
+# HTTP client for health checks
+requests==2.31.0
+
+# PyTorch (downgraded for compatibility)
+torch==2.0.1
+torchvision==0.15.2
