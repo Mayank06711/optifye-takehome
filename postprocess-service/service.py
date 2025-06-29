@@ -50,6 +50,10 @@ class PostProcessingService:
         try:
             self.s3_client = boto3.client('s3', region_name=self.aws_region)
             logger.info(f"Initialized S3 client for region: {self.aws_region}")
+            
+            # Check if bucket exists, create if it doesn't
+            self._ensure_bucket_exists()
+            
         except Exception as e:
             logger.error(f"Failed to initialize S3 client: {e}")
             self.s3_client = None
@@ -61,6 +65,28 @@ class PostProcessingService:
         logger.info(f"Initialized PostProcessingService")
         logger.info(f"S3 bucket: {self.s3_bucket}")
         logger.info(f"AWS region: {self.aws_region}")
+    
+    def _ensure_bucket_exists(self):
+        """
+        Check if S3 bucket exists, create it if it doesn't
+        """
+        try:
+            # Check if bucket exists
+            self.s3_client.head_bucket(Bucket=self.s3_bucket)
+            logger.info(f"S3 bucket '{self.s3_bucket}' exists")
+        except self.s3_client.exceptions.NoSuchBucket:
+            logger.info(f"S3 bucket '{self.s3_bucket}' does not exist, creating...")
+            try:
+                # Create bucket
+                self.s3_client.create_bucket(
+                    Bucket=self.s3_bucket,
+                    CreateBucketConfiguration={'LocationConstraint': self.aws_region}
+                )
+                logger.info(f"✅ Successfully created S3 bucket '{self.s3_bucket}'")
+            except Exception as e:
+                logger.error(f"Failed to create S3 bucket '{self.s3_bucket}': {e}")
+        except Exception as e:
+            logger.error(f"Error checking S3 bucket '{self.s3_bucket}': {e}")
     
     def base64_to_frame(self, frame_data: str) -> Optional[np.ndarray]:
         """
@@ -184,8 +210,8 @@ class PostProcessingService:
         except self.s3_client.exceptions.NoSuchBucket:
             logger.error(f"S3 bucket '{self.s3_bucket}' does not exist")
             return None
-        except self.s3_client.exceptions.AccessDenied:
-            logger.error(f"Access denied to S3 bucket '{self.s3_bucket}'")
+        except self.s3_client.exceptions.NoSuchKey:
+            logger.error(f"S3 key '{s3_key}' does not exist")
             return None
         except Exception as e:
             logger.error(f"Failed to upload {filename} to S3: {e}")
@@ -222,45 +248,50 @@ class PostProcessingService:
             
             # Process selected frames
             for idx in selected_indices:
-                frame_result = frame_results[idx]
-                frame_index = frame_result.frame_index
-                objects = frame_result.objects
-                frame_data = frame_result.frame_data
-                
-                logger.info(f"🖼️ Processing frame {frame_index} with {len(objects)} objects")
-                
-                if frame_data:
-                    # Decode original frame
-                    original_frame = self.base64_to_frame(frame_data)
+                try:
+                    frame_result = frame_results[idx]
+                    frame_index = frame_result.frame_index
+                    objects = frame_result.objects
+                    frame_data = frame_result.frame_data
                     
-                    if original_frame is not None:
-                        # Draw bounding boxes
-                        annotated_frame = self.draw_bounding_boxes(original_frame, objects)
+                    logger.info(f"🖼️ Processing frame {frame_index} with {len(objects)} objects")
+                    
+                    if frame_data:
+                        # Decode original frame
+                        original_frame = self.base64_to_frame(frame_data)
                         
-                        # Upload to S3
-                        timestamp = int(time.time() * 1000)
-                        filename = f"batch_{batch_id}_frame_{frame_index}_{timestamp}.jpg"
-                        s3_url = self.upload_to_s3(annotated_frame, filename)
-                        
-                        if s3_url:
-                            s3_urls.append(s3_url)
-                            processed_frame = ProcessedFrame(
-                                frame_index=frame_index,
-                                objects=objects,
-                                s3_url=s3_url,
-                                filename=filename,
-                                detection_count=len(objects),
-                                frame_classification=frame_result.frame_classification
-                            )
-                            processed_frames.append(processed_frame)
-                            self.uploaded_frames += 1
-                            logger.info(f"✅ Frame {frame_index} processed and uploaded to S3")
+                        if original_frame is not None:
+                            # Draw bounding boxes
+                            annotated_frame = self.draw_bounding_boxes(original_frame, objects)
+                            
+                            # Upload to S3
+                            timestamp = int(time.time() * 1000)
+                            filename = f"batch_{batch_id}_frame_{frame_index}_{timestamp}.jpg"
+                            s3_url = self.upload_to_s3(annotated_frame, filename)
+                            
+                            if s3_url:
+                                s3_urls.append(s3_url)
+                                processed_frame = ProcessedFrame(
+                                    frame_index=frame_index,
+                                    objects=objects,
+                                    s3_url=s3_url,
+                                    filename=filename,
+                                    detection_count=len(objects),
+                                    frame_classification=frame_result.frame_classification
+                                )
+                                processed_frames.append(processed_frame)
+                                self.uploaded_frames += 1
+                                logger.info(f"✅ Frame {frame_index} processed and uploaded to S3")
+                            else:
+                                logger.warning(f"⚠️ Failed to upload frame {frame_index} to S3, but frame was processed")
                         else:
-                            logger.error(f"❌ Failed to upload frame {frame_index} to S3")
+                            logger.warning(f"⚠️ Failed to decode frame {frame_index}")
                     else:
-                        logger.error(f"❌ Failed to decode frame {frame_index}")
-                else:
-                    logger.warning(f"⚠️ No frame data for frame {frame_index}")
+                        logger.warning(f"⚠️ No frame data for frame {frame_index}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error processing frame {idx}: {e}")
+                    continue  # Continue with next frame
             
             # Create batch statistics
             batch_statistics = BatchStatistics(
@@ -275,7 +306,7 @@ class PostProcessingService:
             processing_time = time.time() - start_time
             response = PostProcessingResponse(
                 batch_id=batch_id,
-                status="completed",
+                status="completed" if len(processed_frames) > 0 else "failed",
                 processed_frames=len(processed_frames),
                 s3_urls=s3_urls,
                 total_detections=sum(len(f.objects) for f in processed_frames),
