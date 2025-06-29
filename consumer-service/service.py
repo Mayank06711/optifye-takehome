@@ -92,6 +92,25 @@ class ConsumerService:
         
         return batch_request
     
+    def _safe_serialize_request(self, batch_request: BatchRequest) -> Dict[str, Any]:
+        """
+        Safely serialize batch request without logging frame data
+        
+        Args:
+            batch_request: Batch request to serialize
+            
+        Returns:
+            dict: Serialized request with truncated frame data for logging
+        """
+        request_dict = batch_request.dict()
+        
+        # Truncate frame data for logging safety
+        for frame in request_dict.get('frames', []):
+            if 'frame_data' in frame and len(frame['frame_data']) > 50:
+                frame['frame_data'] = frame['frame_data'][:50] + "...[TRUNCATED]"
+        
+        return request_dict
+    
     def call_inference_service(self, batch_request: BatchRequest) -> Optional[InferenceResponse]:
         """
         Call inference service with batch request
@@ -302,10 +321,10 @@ class ConsumerService:
                 
                 total_objects += len(objects)
                 
-                # Create frame result
+                # Create frame result with truncated frame data
                 frame_result = FrameResult(
                     frame_index=i,
-                    frame_data=frame.frame_data,  # Keep original frame data
+                    frame_data="[TRUNCATED_FOR_LOGGING]",  # Don't log the actual frame data
                     objects=objects,
                     object_count=len(objects),
                     frame_classification=", ".join(set([obj.class_name for obj in objects]))
@@ -314,7 +333,7 @@ class ConsumerService:
                 # Frame with no detections
                 frame_result = FrameResult(
                     frame_index=i,
-                    frame_data=frame.frame_data,
+                    frame_data="[TRUNCATED_FOR_LOGGING]",  # Don't log the actual frame data
                     objects=[],
                     object_count=0,
                     frame_classification="Background"

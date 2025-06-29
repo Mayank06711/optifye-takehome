@@ -17,6 +17,14 @@ class FrameData(BaseModel):
     frame_id: int = Field(..., description="Unique frame identifier")
     frame_data: str = Field(..., description="Base64 encoded frame data")
     timestamp: float = Field(..., description="Frame capture timestamp")
+    
+    def __repr__(self) -> str:
+        """Custom repr to avoid logging base64 data"""
+        return f"FrameData(frame_id={self.frame_id}, frame_data='[BASE64_DATA]', timestamp={self.timestamp})"
+    
+    def __str__(self) -> str:
+        """Custom str to avoid logging base64 data"""
+        return self.__repr__()
 
 class BatchRequest(BaseModel):
     """Request model for sending batch to inference service"""
@@ -38,6 +46,14 @@ class FrameResult(BaseModel):
     objects: List[BoundingBox] = Field(default=[], description="Detected objects")
     object_count: int = Field(default=0, description="Number of objects detected")
     frame_classification: str = Field(default="", description="Frame classification summary")
+    
+    def __repr__(self) -> str:
+        """Custom repr to avoid logging base64 data"""
+        return f"FrameResult(frame_index={self.frame_index}, frame_data='[BASE64_DATA]', objects={len(self.objects)}, object_count={self.object_count}, frame_classification='{self.frame_classification}')"
+    
+    def __str__(self) -> str:
+        """Custom str to avoid logging base64 data"""
+        return self.__repr__()
 
 class BatchClassification(BaseModel):
     """Model for batch-level classification statistics"""
@@ -118,6 +134,11 @@ ERROR HANDLING:
 - ErrorResponse model for consistent error format
 - Optional batch_id for error tracking
 - Timestamp for error timing
+
+LOGGING SAFETY:
+- Custom __repr__ and __str__ methods prevent base64 data logging
+- Frame data is masked as [BASE64_DATA] in logs
+- Maintains data integrity while protecting logs
 
 USAGE:
 from models import BatchRequest, InferenceResponse, PostProcessingRequest
