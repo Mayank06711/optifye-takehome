@@ -58,11 +58,7 @@ class ConsumerService:
         self.failed_batches = 0
         self.total_frames_processed = 0
         
-        logger.info(f"Initialized ConsumerService")
-        logger.info(f"Kafka brokers: {kafka_brokers}")
-        logger.info(f"Inference service: {inference_service_url}")
-        logger.info(f"Post-processing service: {post_processing_service_url}")
-        logger.info(f"Batch size: {batch_size}")
+        logger.info(f"ConsumerService initialized - Batch size: {batch_size}, Timeout: {timeout}s")
     
     def create_batch_request(self, frames: List[Dict[str, Any]], source: str) -> BatchRequest:
         """
@@ -94,7 +90,6 @@ class ConsumerService:
             timestamp=time.time()
         )
         
-        logger.info(f"Created batch request {batch_id} with {len(frames)} frames")
         return batch_request
     
     def call_inference_service(self, batch_request: BatchRequest) -> Optional[InferenceResponse]:
@@ -108,7 +103,7 @@ class ConsumerService:
             InferenceResponse: Inference results or None if failed
         """
         try:
-            logger.info(f"Calling inference service for batch {batch_request.batch_id}")
+            logger.info(f"🔍 Calling inference service for batch {batch_request.batch_id}")
             
             # For testing: Use dummy inference response
             # TODO: Replace with actual HTTP call when inference service is ready
@@ -139,10 +134,7 @@ class ConsumerService:
                 logger.error(f"❌ Inference service request failed: {e}")
                 return None
             
-            logger.info(f"✅ Inference completed for batch {batch_request.batch_id}")
-            logger.info(f"📊 Processed frames: {inference_response.processed_frames}")
-            logger.info(f"📊 Total objects: {inference_response.total_objects}")
-            logger.info(f"⏱️ Processing time: {inference_response.processing_time:.2f}s")
+            logger.info(f"✅ Inference completed - Objects: {inference_response.total_objects}, Time: {inference_response.processing_time:.2f}s")
             
             return inference_response
                 
@@ -161,7 +153,7 @@ class ConsumerService:
             PostProcessingResponse: Post-processing results or None if failed
         """
         try:
-            logger.info(f"Calling post-processing service for batch {inference_response.batch_id}")
+            logger.info(f"📤 Calling post-processing service for batch {inference_response.batch_id}")
             
             # Create post-processing request
             post_request = PostProcessingRequest(
@@ -187,11 +179,7 @@ class ConsumerService:
                 post_data = response.json()
                 post_response = PostProcessingResponse(**post_data)
                 
-                logger.info(f"✅ Post-processing completed for batch {inference_response.batch_id}")
-                logger.info(f"📊 Processed frames: {post_response.processed_frames}")
-                logger.info(f"📊 S3 URLs: {len(post_response.s3_urls)}")
-                logger.info(f"📤 S3 URLs: {post_response.s3_urls}")
-                logger.info(f"⏱️ Processing time: {post_response.processing_time:.2f}s")
+                logger.info(f"✅ Post-processing completed - S3 URLs: {len(post_response.s3_urls)}, Time: {post_response.processing_time:.2f}s")
                 
                 return post_response
             else:
@@ -220,8 +208,6 @@ class ConsumerService:
             bool: True if processing succeeded, False otherwise
         """
         try:
-            logger.info(f"Processing batch with {len(frames)} frames from {source}")
-            
             # Step 1: Create batch request
             batch_request = self.create_batch_request(frames, source)
             
@@ -242,9 +228,6 @@ class ConsumerService:
             # Step 4: Update statistics
             self.processed_batches += 1
             self.total_frames_processed += len(frames)
-            
-            logger.info(f"✅ Batch {batch_request.batch_id} completed successfully")
-            logger.info(f"📈 Stats - Batches: {self.processed_batches}, Failed: {self.failed_batches}")
             
             return True
             

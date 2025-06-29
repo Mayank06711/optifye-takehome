@@ -77,12 +77,8 @@ class Consumer:
         self.current_batch = []
         self.current_source = None
         
-        logger.info(f"Initialized consumer")
-        logger.info(f"Kafka brokers: {self.kafka_brokers}")
-        logger.info(f"Kafka topic: {self.kafka_topic}")
-        logger.info(f"Inference service: {self.inference_service_url}")
-        logger.info(f"Post-processing service: {self.post_processing_service_url}")
-        logger.info(f"Batch size: {self.batch_size}")
+        logger.info(f"Consumer initialized - Topic: {self.kafka_topic}, Batch size: {self.batch_size}")
+        logger.info(f"Services - Inference: {self.inference_service_url}, Post-process: {self.post_processing_service_url}")
     
     def _safe_json_deserializer(self, m):
         """
@@ -97,8 +93,7 @@ class Consumer:
         try:
             return json.loads(m.decode('utf-8'))
         except json.JSONDecodeError:
-            raw_content = m.decode('utf-8', errors='ignore')
-            logger.warning(f"📝 Skipping non-JSON message: {raw_content[:100]}...")
+            logger.warning(f"Skipping non-JSON message")
             return {'_skip': True}
     
     def process_frame(self, frame_data: Dict[str, Any]):
@@ -130,8 +125,6 @@ class Consumer:
         if not self.current_source:
             self.current_source = source
         
-        logger.info(f"📥 Added frame to batch. Current size: {len(self.current_batch)}")
-        
         # Check if batch is complete
         if len(self.current_batch) >= self.batch_size:
             self.process_batch()
@@ -144,7 +137,7 @@ class Consumer:
             logger.warning("No frames in current batch to process")
             return
         
-        logger.info(f"🔄 Processing batch with {len(self.current_batch)} frames from {self.current_source}")
+        logger.info(f"Processing batch: {len(self.current_batch)} frames from {self.current_source}")
         
         # Process batch through service layer
         success = self.service.process_batch(self.current_batch, self.current_source)
@@ -158,9 +151,10 @@ class Consumer:
         self.current_batch = []
         self.current_source = None
         
-        # Log statistics
+        # Log statistics periodically
         stats = self.service.get_statistics()
-        logger.info(f"📈 Stats - Batches: {stats['processed_batches']}, Failed: {stats['failed_batches']}, Success Rate: {stats['success_rate']:.1f}%")
+        if stats['processed_batches'] % 10 == 0:  # Log every 10 batches
+            logger.info(f"📊 Stats - Batches: {stats['processed_batches']}, Failed: {stats['failed_batches']}, Success Rate: {stats['success_rate']:.1f}%")
     
     def run(self):
         """
