@@ -1,32 +1,32 @@
 version: "3.8"
 
 services:
-  # Producer service: builds Docker image from ./producer, uses .env for environment variables
+  # Producer service: builds Docker image from ./producer-service, uses .env for environment variables
   producer:
-    build: ./producer                # Build Docker image from the ./producer directory
-    container_name: producer         # Name the running container "producer"
+    build: ./producer-service                # Build Docker image from the ./producer-service directory
+    container_name: producer_service         # Name the running container "producer"
     env_file:                        # Load environment variables from this file and injects them as environment variables into the container at runtime.
-      - ./producer/.env
+      - ./producer-service/.env
     restart: unless-stopped          # Always restart unless explicitly stopped
 
-  # Consumer service: builds from ./consumer, uses .env, depends on producer
+  # Consumer service: builds from ./consumer-service, uses .env, depends on producer
   consumer:
-    build: ./consumer
-    container_name: consumer
+    build: ./consumer-service
+    container_name: consumer_service
     env_file:
-      - ./consumer/.env
+      - ./consumer-service/.env
     depends_on:                      # Wait for producer to be started before starting consumer
-      - producer
+      - producer             #Service name producer 
     restart: unless-stopped
 
-  # Post-processing service: builds from ./postprocess, uses .env, exposes port 8081
+  # Post-processing service: builds from ./postprocess-service, uses .env, exposes port 8003
   postprocess:
-    build: ./postprocess
-    container_name: postprocess
+    build: ./postprocess-service
+    container_name: postprocess_service
     env_file:
-      - ./postprocess/.env
+      - ./postprocess-service/.env
     ports:
-      - "8003:8003"                  # Map host port 8081 to container port 8081
+      - "8003:8003"                  # Map host port 8003 to container port 8003
     restart: unless-stopped
 
 # ---------------------------------------------------------------------------
