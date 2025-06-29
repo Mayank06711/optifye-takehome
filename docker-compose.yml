@@ -16,7 +16,7 @@ services:
     env_file:
       - ./consumer-service/.env
     depends_on:                      # Wait for producer to be started before starting consumer
-      - producer             #Service name producer 
+      - producer             #Service name producer
     restart: unless-stopped
 
   # Post-processing service: builds from ./postprocess-service, uses .env, exposes port 8003
