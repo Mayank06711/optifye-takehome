@@ -60,39 +60,39 @@ class ConsumerService:
         
         logger.info(f"ConsumerService initialized - Batch size: {batch_size}, Timeout: {timeout}s")
     
-    def create_batch_request(self, frames: List[Dict[str, Any]], source: str) -> BatchRequest:
+    def create_batch_request(self, frames: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
         """
-        Create batch request from frames
+        Create batch request from frames for the inference service
         
         Args:
             frames: List of frame data from Kafka
             source: RTSP source URL
             
         Returns:
-            BatchRequest: Validated batch request
+            dict: Batch request in the format expected by inference service
         """
-        batch_id = f"batch_{int(time.time() * 1000)}"
+        batch_id = int(time.time() * 1000)  # Convert to int as expected by inference service
         
-        # Convert frames to FrameData models
+        # Convert frames to the format expected by inference service
         frame_data_list = []
         for i, frame in enumerate(frames):
-            frame_data = FrameData(
-                frame_id=i,
-                frame_data=frame.get('frame_data', ''),
-                timestamp=frame.get('timestamp', time.time())
-            )
+            # Extract frame data from Kafka message structure
+            frame_data = {
+                'frame_id': frame.get('frame_id', i),  # Use frame_id from message or fallback to index
+                'frame_data': frame.get('frame_data', ''),
+                'timestamp': frame.get('timestamp', time.time()),
+                'source': source  # Add source to each frame as required by inference service
+            }
             frame_data_list.append(frame_data)
         
-        batch_request = BatchRequest(
-            batch_id=batch_id,
-            frames=frame_data_list,
-            source=source,
-            timestamp=time.time()
-        )
+        batch_request = {
+            'batch_id': batch_id,
+            'frames': frame_data_list
+        }
         
         return batch_request
     
-    def _safe_serialize_request(self, batch_request: BatchRequest) -> Dict[str, Any]:
+    def _safe_serialize_request(self, batch_request: Dict[str, Any]) -> Dict[str, Any]:
         """
         Safely serialize batch request without logging frame data
         
@@ -102,7 +102,7 @@ class ConsumerService:
         Returns:
             dict: Serialized request with truncated frame data for logging
         """
-        request_dict = batch_request.dict()
+        request_dict = batch_request.copy()
         
         # Truncate frame data for logging safety
         for frame in request_dict.get('frames', []):
@@ -111,7 +111,7 @@ class ConsumerService:
         
         return request_dict
     
-    def call_inference_service(self, batch_request: BatchRequest) -> Optional[InferenceResponse]:
+    def call_inference_service(self, batch_request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Call inference service with batch request
         
@@ -119,49 +119,39 @@ class ConsumerService:
             batch_request: Batch request to send
             
         Returns:
-            InferenceResponse: Inference results or None if failed
+            dict: Inference results or None if failed
         """
         try:
-            logger.info(f"🔍 Calling inference service for batch {batch_request.batch_id}")
+            logger.info(f"🔍 Calling inference service for batch {batch_request['batch_id']}")
             
-            # For testing: Use dummy inference response
-            # TODO: Replace with actual HTTP call when inference service is ready
-            # inference_response = self.get_dummy_inference_response(batch_request)
+            # Send request to inference service
+            response = requests.post(
+                f"{self.inference_service_url}/predict",
+                json=batch_request,
+                timeout=self.timeout,
+                headers={'Content-Type': 'application/json'}
+            )
             
-            # REAL INFERENCE SERVICE CALL (uncomment when ready)
-            try:
-                # Send request to inference service
-                response = requests.post(
-                    f"{self.inference_service_url}/predict",
-                    json=batch_request.dict(),
-                    timeout=self.timeout,
-                    headers={'Content-Type': 'application/json'}
-                )
-                
-                if response.status_code == 200:
-                    # Parse and validate response
-                    inference_data = response.json()
-                    inference_response = InferenceResponse(**inference_data)
-                else:
-                    logger.error(f"❌ Inference service error: {response.status_code} - {response.text}")
-                    return None
+            if response.status_code == 200:
+                # Parse response
+                inference_data = response.json()
+                logger.info(f"✅ Inference completed - Objects: {inference_data.get('total_objects', 0)}, Time: {inference_data.get('processing_time', 0):.2f}s")
+                return inference_data
+            else:
+                logger.error(f"❌ Inference service error: {response.status_code} - {response.text}")
+                return None
                     
-            except requests.exceptions.Timeout:
-                logger.error(f"❌ Inference service timeout for batch {batch_request.batch_id}")
-                return None
-            except requests.exceptions.RequestException as e:
-                logger.error(f"❌ Inference service request failed: {e}")
-                return None
-            
-            logger.info(f"✅ Inference completed - Objects: {inference_response.total_objects}, Time: {inference_response.processing_time:.2f}s")
-            
-            return inference_response
-                
+        except requests.exceptions.Timeout:
+            logger.error(f"❌ Inference service timeout for batch {batch_request['batch_id']}")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Inference service request failed: {e}")
+            return None
         except Exception as e:
             logger.error(f"❌ Unexpected error calling inference service: {e}")
             return None
     
-    def call_post_processing_service(self, inference_response: InferenceResponse) -> Optional[PostProcessingResponse]:
+    def call_post_processing_service(self, inference_response: Dict[str, Any]) -> Optional[PostProcessingResponse]:
         """
         Call post-processing service with inference results
         
@@ -172,17 +162,50 @@ class ConsumerService:
             PostProcessingResponse: Post-processing results or None if failed
         """
         try:
-            logger.info(f"📤 Calling post-processing service for batch {inference_response.batch_id}")
+            batch_id = str(inference_response.get('batch_id', 'unknown'))
+            logger.info(f"📤 Calling post-processing service for batch {batch_id}")
+            
+            # Convert inference response to post-processing request format
+            frame_results = []
+            for frame_result in inference_response.get('frame_results', []):
+                # Convert ObjectDetection to BoundingBox format
+                objects = []
+                for obj in frame_result.get('objects', []):
+                    bbox = BoundingBox(
+                        class_name=obj.get('class_name', ''),
+                        confidence=obj.get('confidence', 0.0),
+                        bbox=obj.get('bbox', [])
+                    )
+                    objects.append(bbox)
+                
+                # Create FrameResult in consumer format
+                consumer_frame_result = FrameResult(
+                    frame_index=frame_result.get('frame_id', 0),
+                    frame_data=frame_result.get('frame_data', ''),
+                    objects=objects,
+                    object_count=frame_result.get('object_count', 0),
+                    frame_classification=frame_result.get('frame_classification', '')
+                )
+                frame_results.append(consumer_frame_result)
+            
+            # Create batch classification
+            batch_class_data = inference_response.get('batch_classification', {})
+            batch_classification = BatchClassification(
+                primary_class=batch_class_data.get('primary_class', ''),
+                secondary_classes=batch_class_data.get('secondary_classes', []),
+                class_distribution=batch_class_data.get('class_distribution', {}),
+                average_confidence=batch_class_data.get('average_confidence', 0.0)
+            )
             
             # Create post-processing request
             post_request = PostProcessingRequest(
-                batch_id=inference_response.batch_id,
-                processed_frames=inference_response.processed_frames,
-                total_objects=inference_response.total_objects,
-                processing_time=inference_response.processing_time,
-                timestamp=inference_response.timestamp,
-                frame_results=inference_response.frame_results,
-                batch_classification=inference_response.batch_classification
+                batch_id=batch_id,
+                processed_frames=inference_response.get('processed_frames', 0),
+                total_objects=inference_response.get('total_objects', 0),
+                processing_time=inference_response.get('processing_time', 0.0),
+                timestamp=inference_response.get('timestamp', time.time()),
+                frame_results=frame_results,
+                batch_classification=batch_classification
             )
             
             # Send request to post-processing service
@@ -206,7 +229,7 @@ class ConsumerService:
                 return None
                 
         except requests.exceptions.Timeout:
-            logger.error(f"❌ Post-processing service timeout for batch {inference_response.batch_id}")
+            logger.error(f"❌ Post-processing service timeout for batch {batch_id}")
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Post-processing service request failed: {e}")
@@ -233,14 +256,14 @@ class ConsumerService:
             # Step 2: Call inference service
             inference_response = self.call_inference_service(batch_request)
             if not inference_response:
-                logger.error(f"❌ Inference failed for batch {batch_request.batch_id}")
+                logger.error(f"❌ Inference failed for batch {batch_request['batch_id']}")
                 self.failed_batches += 1
                 return False
             
             # Step 3: Call post-processing service
             post_response = self.call_post_processing_service(inference_response)
             if not post_response:
-                logger.error(f"❌ Post-processing failed for batch {batch_request.batch_id}")
+                logger.error(f"❌ Post-processing failed for batch {batch_request['batch_id']}")
                 self.failed_batches += 1
                 return False
             
@@ -269,127 +292,6 @@ class ConsumerService:
             'success_rate': (self.processed_batches / (self.processed_batches + self.failed_batches)) * 100 if (self.processed_batches + self.failed_batches) > 0 else 0
         }
 
-    def get_dummy_inference_response(self, batch_request: BatchRequest) -> InferenceResponse:
-        """
-        Generate dummy inference response for testing
-        
-        Args:
-            batch_request: Batch request to simulate inference on
-            
-        Returns:
-            InferenceResponse: Mock inference results
-        """
-        import random
-        
-        logger.info(f"🔬 Generating dummy inference response for batch {batch_request.batch_id}")
-        
-        # Simulate processing time
-        processing_time = random.uniform(1.5, 3.0)
-        
-        # Generate frame results
-        frame_results = []
-        total_objects = 0
-        
-        for i, frame in enumerate(batch_request.frames):
-            # Randomly decide if frame has detections
-            has_detections = random.choice([True, True, False])  # 66% chance of detections
-            
-            if has_detections:
-                # Generate random objects
-                num_objects = random.randint(1, 3)
-                objects = []
-                
-                for j in range(num_objects):
-                    # Random object class
-                    class_name = random.choice(['person', 'car', 'bicycle', 'dog', 'cat'])
-                    
-                    # Random confidence
-                    confidence = random.uniform(0.6, 0.95)
-                    
-                    # Random bounding box (within frame bounds)
-                    x1 = random.randint(50, 400)
-                    y1 = random.randint(50, 300)
-                    x2 = x1 + random.randint(50, 150)
-                    y2 = y1 + random.randint(50, 150)
-                    
-                    bbox = BoundingBox(
-                        class_name=class_name,
-                        confidence=confidence,
-                        bbox=[x1, y1, x2, y2]
-                    )
-                    objects.append(bbox)
-                
-                total_objects += len(objects)
-                
-                # Create frame result with truncated frame data
-                frame_result = FrameResult(
-                    frame_index=i,
-                    frame_data="[TRUNCATED_FOR_LOGGING]",  # Don't log the actual frame data
-                    objects=objects,
-                    object_count=len(objects),
-                    frame_classification=", ".join(set([obj.class_name for obj in objects]))
-                )
-            else:
-                # Frame with no detections
-                frame_result = FrameResult(
-                    frame_index=i,
-                    frame_data="[TRUNCATED_FOR_LOGGING]",  # Don't log the actual frame data
-                    objects=[],
-                    object_count=0,
-                    frame_classification="Background"
-                )
-            
-            frame_results.append(frame_result)
-        
-        # Generate batch classification
-        all_classes = []
-        for frame_result in frame_results:
-            for obj in frame_result.objects:
-                all_classes.append(obj.class_name)
-        
-        if all_classes:
-            # Count class distribution
-            class_counts = {}
-            for class_name in all_classes:
-                class_counts[class_name] = class_counts.get(class_name, 0) + 1
-            
-            # Find primary class
-            primary_class = max(class_counts, key=class_counts.get)
-            secondary_classes = [cls for cls in class_counts.keys() if cls != primary_class]
-            
-            # Calculate average confidence
-            confidences = [obj.confidence for frame_result in frame_results for obj in frame_result.objects]
-            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-            
-            batch_classification = BatchClassification(
-                primary_class=primary_class,
-                secondary_classes=secondary_classes,
-                class_distribution=class_counts,
-                average_confidence=avg_confidence
-            )
-        else:
-            # No detections in batch
-            batch_classification = BatchClassification(
-                primary_class="Background",
-                secondary_classes=[],
-                class_distribution={},
-                average_confidence=0.0
-            )
-        
-        # Create inference response
-        inference_response = InferenceResponse(
-            batch_id=batch_request.batch_id,
-            processed_frames=len(batch_request.frames),
-            total_objects=total_objects,
-            processing_time=processing_time,
-            timestamp=time.time(),
-            frame_results=frame_results,
-            batch_classification=batch_classification
-        )
-        
-        logger.info(f"🔬 Dummy inference completed - Objects: {total_objects}, Time: {processing_time:.2f}s")
-        return inference_response
-
 """
 ================================================================================
                                 CONSUMER SERVICE SUMMARY
@@ -404,18 +306,18 @@ Kafka Frames → Batch Request → Inference Service → Post-Processing Service
 KEY METHODS:
 
 1. create_batch_request()
-   - Converts Kafka frames to validated BatchRequest
-   - Generates unique batch IDs
-   - Ensures data integrity
+   - Converts Kafka frames to inference service format
+   - Generates unique batch IDs as integers
+   - Adds source field to each frame as required
 
 2. call_inference_service()
-   - HTTP POST to inference service
-   - Validates InferenceResponse
-   - Handles timeouts and errors
+   - HTTP POST to real inference service
+   - Handles response parsing and validation
+   - Manages timeouts and errors
 
 3. call_post_processing_service()
+   - Converts inference response to post-processing format
    - HTTP POST to post-processing service
-   - Forwards inference results
    - Validates PostProcessingResponse
 
 4. process_batch()
